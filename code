@@ -1,0 +1,198 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Stock Market Forecasting — ARIMA & LSTM\n",
+    "**Dataset:** Apple Inc. (AAPL) stock data via `yfinance`  \n",
+    "**Goal:** Forecast closing prices using both a statistical model (ARIMA) and a deep learning model (LSTM)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import numpy as np\n",
+    "import pandas as pd\n",
+    "import matplotlib.pyplot as plt\n",
+    "import warnings\n",
+    "warnings.filterwarnings('ignore')\n",
+    "\n",
+    "# Install if needed: pip install yfinance statsmodels\n",
+    "import yfinance as yf\n",
+    "from statsmodels.tsa.arima.model import ARIMA\n",
+    "from sklearn.preprocessing import MinMaxScaler\n",
+    "from sklearn.metrics import mean_squared_error\n",
+    "from tensorflow.keras.models import Sequential\n",
+    "from tensorflow.keras.layers import LSTM, Dense"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 1. Load Data"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "df = yf.download('AAPL', start='2020-01-01', end='2023-12-31')\n",
+    "close = df['Close'].dropna()\n",
+    "print(f\"Shape: {close.shape}\")\n",
+    "close.tail()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 2. Exploratory Data Analysis"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "fig, axes = plt.subplots(2, 1, figsize=(12, 6))\n",
+    "\n",
+    "# Closing price\n",
+    "axes[0].plot(close, color='steelblue')\n",
+    "axes[0].set_title('AAPL Closing Price')\n",
+    "axes[0].set_ylabel('Price (USD)')\n",
+    "\n",
+    "# 30-day rolling mean and std\n",
+    "axes[1].plot(close.rolling(30).mean(), label='30-day MA', color='orange')\n",
+    "axes[1].plot(close.rolling(30).std(), label='30-day Std', color='red', linestyle='--')\n",
+    "axes[1].set_title('Rolling Mean & Volatility')\n",
+    "axes[1].legend()\n",
+    "\n",
+    "plt.tight_layout()\n",
+    "plt.show()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 3. ARIMA Model"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "train_size = int(len(close) * 0.8)\n",
+    "train, test = close[:train_size], close[train_size:]\n",
+    "\n",
+    "# Fit ARIMA(5,1,0)\n",
+    "model_arima = ARIMA(train, order=(5, 1, 0))\n",
+    "arima_fit = model_arima.fit()\n",
+    "\n",
+    "# Forecast\n",
+    "arima_pred = arima_fit.forecast(steps=len(test))\n",
+    "arima_rmse = np.sqrt(mean_squared_error(test, arima_pred))\n",
+    "print(f\"ARIMA RMSE: {arima_rmse:.2f}\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 4. LSTM Model"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "scaler = MinMaxScaler()\n",
+    "scaled = scaler.fit_transform(close.values.reshape(-1, 1))\n",
+    "\n",
+    "# Create sequences\n",
+    "def create_sequences(data, window=60):\n",
+    "    X, y = [], []\n",
+    "    for i in range(window, len(data)):\n",
+    "        X.append(data[i-window:i, 0])\n",
+    "        y.append(data[i, 0])\n",
+    "    return np.array(X), np.array(y)\n",
+    "\n",
+    "X, y = create_sequences(scaled)\n",
+    "split = int(len(X) * 0.8)\n",
+    "X_train, X_test = X[:split], X[split:]\n",
+    "y_train, y_test = y[:split], y[split:]\n",
+    "\n",
+    "X_train = X_train.reshape((X_train.shape[0], X_train.shape[1], 1))\n",
+    "X_test  = X_test.reshape((X_test.shape[0], X_test.shape[1], 1))\n",
+    "\n",
+    "# Build LSTM\n",
+    "model_lstm = Sequential([\n",
+    "    LSTM(50, return_sequences=True, input_shape=(X_train.shape[1], 1)),\n",
+    "    LSTM(50),\n",
+    "    Dense(1)\n",
+    "])\n",
+    "model_lstm.compile(optimizer='adam', loss='mse')\n",
+    "model_lstm.fit(X_train, y_train, epochs=10, batch_size=32, verbose=1)\n",
+    "\n",
+    "lstm_pred = scaler.inverse_transform(model_lstm.predict(X_test))\n",
+    "y_test_inv = scaler.inverse_transform(y_test.reshape(-1, 1))\n",
+    "lstm_rmse = np.sqrt(mean_squared_error(y_test_inv, lstm_pred))\n",
+    "print(f\"LSTM RMSE: {lstm_rmse:.2f}\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 5. Results Comparison"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "plt.figure(figsize=(12, 5))\n",
+    "plt.plot(y_test_inv, label='Actual', color='black')\n",
+    "plt.plot(lstm_pred, label='LSTM Predicted', color='steelblue')\n",
+    "plt.title('LSTM Prediction vs Actual (AAPL)')\n",
+    "plt.legend()\n",
+    "plt.tight_layout()\n",
+    "plt.show()\n",
+    "\n",
+    "print(f\"\\nModel Comparison:\")\n",
+    "print(f\"  ARIMA RMSE : {arima_rmse:.2f}\")\n",
+    "print(f\"  LSTM  RMSE : {lstm_rmse:.2f}\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Conclusion\n",
+    "- **ARIMA** works well for short-term, linear trends but struggles with non-linear patterns.\n",
+    "- **LSTM** captures longer-term dependencies and non-linearity, generally achieving lower RMSE on volatile data.\n",
+    "- Real stock prediction is influenced by news, sentiment, and macroeconomics — models serve as a baseline, not a trading signal."
+   ]
+  }
+ ],
+ "metadata": {
+  "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+  "language_info": {"name": "python", "version": "3.10.0"}
+ },
+ "nbformat": 4,
+ "nbformat_minor": 4
+}
